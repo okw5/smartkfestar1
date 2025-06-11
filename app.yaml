@@ -1,0 +1,11 @@
+# 런타임을 custom으로 지정하여 Dockerfile을 사용하도록 합니다.
+runtime: custom
+
+# 유연한 환경(Flexible Environment)을 사용하도록 명시합니다.
+env: flex
+
+# 리소스 설정 (필요에 따라 조절)
+resources:
+  cpu: 1
+  memory_gb: 0.5
+  disk_size_gb: 10
