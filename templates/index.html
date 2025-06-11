@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>축제 방문객 예측 서비스 (3단계 드롭다운)</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen-Sans, Ubuntu, Cantarell, "Helvetica Neue", sans-serif; margin: 20px; background-color: #f8f9fa; color: #212529; }
+        .container { max-width: 600px; margin: 0 auto; background-color: #ffffff; padding: 30px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1); }
+        h1 { text-align: center; color: #0056b3; margin-bottom: 30px; }
+        label { display: block; margin-bottom: 8px; font-weight: 600; color: #495057; }
+        input[type="text"], input[type="date"], input[type="number"], select { width: 100%; padding: 12px; margin-bottom: 20px; border: 1px solid #ced4da; border-radius: 8px; box-sizing: border-box; background-color: #fff; font-size: 16px; }
+        select:disabled { background-color: #e9ecef; }
+        button { background-color: #007bff; color: white; padding: 14px 20px; border: none; border-radius: 8px; cursor: pointer; width: 100%; font-size: 16px; font-weight: bold; transition: background-color 0.3s ease; }
+        button:hover { background-color: #0056b3; }
+        .result, .error { margin-top: 25px; padding: 15px; border-radius: 8px; text-align: center; font-size: 1.1em; font-weight: bold; }
+        .result { background-color: #d1e7dd; border-left: 5px solid #198754; color: #0a3622; }
+        .error { background-color: #f8d7da; border-left: 5px solid #dc3545; color: #58151c; }
+        .form-group { margin-bottom: 20px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>✨ 축제 예상 방문객 수 예측 ✨</h1>
+
+        <form action="/predict" method="post">
+            <div class="form-group">
+                <label for="region-select">광역자치단체:</label>
+                <select id="region-select" name="광역자치단체" required></select>
+            </div>
+
+            <div class="form-group">
+                <label for="municipality-select">기초자치단체 시/군/구:</label>
+                <select id="municipality-select" name="기초자치단체 시/군/구" required disabled></select>
+            </div>
+            
+            <div class="form-group">
+                <label for="dong-select">읍/면/동:</label>
+                <select id="dong-select" name="읍/면/동" required disabled>
+                    <option value="">기초자치단체를 먼저 선택하세요</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label for="date-input">축제 시작일:</label>
+                <input type="date" id="date-input" name="축제 시작일" value="{{ original_input['축제 시작일'] if original_input else '2025-06-11' }}" required>
+            </div>
+            <div class="form-group">
+                <label for="type-select">축제 종류:</label>
+                <select id="type-select" name="축제 종류" required></select>
+            </div>
+            <div class="form-group">
+                <label for="budget-input">예산 (백만원 단위):</label>
+                <input type="number" id="budget-input" name="예산" step="1" placeholder="예: 50 (5천만원)" value="{{ original_input.예산 if original_input else '' }}" required>
+            </div>
+            <button type="submit">예측하기</button>
+        </form>
+
+        {% if prediction_result %}<div class="result">{{ prediction_result }}</div>{% endif %}
+        {% if error %}<div class="error"><strong>오류:</strong> {{ error }}</div>{% endif %}
+    </div>
+
+    <script src="{{ url_for('static', filename='korea-regions-data.js') }}"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const regionSelect = document.getElementById('region-select');
+            const municipalitySelect = document.getElementById('municipality-select');
+            const dongSelect = document.getElementById('dong-select'); // [수정 2] 읍/면/동 select 엘리먼트 가져오기
+            const typeSelect = document.getElementById('type-select');
+
+            const originalInput = {
+                region: "{{ original_input.광역자치단체 }}",
+                municipality: "{{ original_input['기초자치단체 시/군/구'] }}",
+                dong: "{{ original_input.읍_면_동 }}", // [수정 3] 기존 읍/면/동 입력 값 가져오기
+                type: "{{ original_input['축제 종류'] }}"
+            };
+
+            // 초기 데이터 채우기 (기존과 거의 동일)
+            populateOptions(regionSelect, koreaRegionsData.regions.map(r => r.label), originalInput.region, '광역자치단체를 선택하세요');
+            populateOptions(typeSelect, koreaRegionsData.festivalTypes, originalInput.type, '축제 종류를 선택하세요');
+
+            // 페이지 로드 시, 기존 선택 값에 따라 드롭다운 연쇄적으로 채우기
+            if (originalInput.region) {
+                populateMunicipalities(originalInput.region, originalInput.municipality);
+            }
+            if (originalInput.municipality) {
+                populateDongs(originalInput.municipality, originalInput.dong);
+            }
+
+            // 이벤트 리스너 설정
+            regionSelect.addEventListener('change', (e) => {
+                populateMunicipalities(e.target.value);
+                // 광역자치단체 변경 시, 하위 드롭다운 초기화
+                resetSelect(dongSelect, '기초자치단체를 먼저 선택하세요');
+            });
+            
+            // [수정 4] 기초자치단체 변경 시, 읍/면/동 드롭다운 채우는 이벤트 리스너 추가
+            municipalitySelect.addEventListener('change', (e) => {
+                populateDongs(e.target.value);
+            });
+
+            // --- 함수 재구성 ---
+            function populateOptions(selectElement, optionsArray, selectedValue, placeholder) {
+                selectElement.innerHTML = `<option value="">${placeholder}</option>`;
+                optionsArray.forEach(optionValue => {
+                    const option = new Option(optionValue, optionValue);
+                    if (optionValue === selectedValue) {
+                        option.selected = true;
+                    }
+                    selectElement.add(option);
+                });
+            }
+            
+            function resetSelect(selectElement, placeholder) {
+                selectElement.innerHTML = `<option value="">${placeholder}</option>`;
+                selectElement.disabled = true;
+            }
+
+            function populateMunicipalities(regionLabel, selectedMunicipality = null) {
+                const selectedRegion = koreaRegionsData.regions.find(r => r.label === regionLabel);
+                if (selectedRegion) {
+                    const municipalities = (koreaRegionsData.municipalities[selectedRegion.value] || []).map(m => m.label);
+                    populateOptions(municipalitySelect, municipalities, selectedMunicipality, '기초자치단을 선택하세요');
+                    municipalitySelect.disabled = municipalities.length === 0;
+                } else {
+                    resetSelect(municipalitySelect, '광역자치단체를 먼저 선택하세요');
+                }
+            }
+
+            // [수정 5] 읍/면/동 목록을 채우는 새로운 함수
+            function populateDongs(municipalityLabel, selectedDong = null) {
+                // 전체 자치구 목록에서 해당 자치구의 value(영문 key) 찾기
+                let muniValue = null;
+                for (const regionKey in koreaRegionsData.municipalities) {
+                    const foundMuni = koreaRegionsData.municipalities[regionKey].find(m => m.label === municipalityLabel);
+                    if (foundMuni) {
+                        muniValue = foundMuni.value;
+                        break;
+                    }
+                }
+                
+                if (muniValue && koreaRegionsData.dongs[muniValue]) {
+                    const dongs = koreaRegionsData.dongs[muniValue];
+                    populateOptions(dongSelect, dongs, selectedDong, '읍/면/동을 선택하세요');
+                    dongSelect.disabled = false;
+                } else {
+                    resetSelect(dongSelect, '읍/면/동 정보가 없습니다');
+                }
+            }
+        });
+    </script>
+</body>
+</html>
